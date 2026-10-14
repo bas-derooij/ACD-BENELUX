@@ -6,7 +6,7 @@ De app draait volledig in de browser: er is geen server en je hoeft niets te ins
 
 ## Openen
 
-De app staat op GitHub Pages: **https://bas-derooij.github.io/ACD-Benelux/**
+De app staat op GitHub Pages: **https://bas-derooij.github.io/ACD-BENELUX/**
 
 Je leads worden **in de browser op je eigen computer** bewaard, niet online en niet op GitHub. Gebruik daarom regelmatig **Data → Back-up downloaden** en bewaar het bestand bijvoorbeeld op OneDrive. Met **Back-up terugzetten** zet je alles terug, ook op een andere computer of in een andere browser. De leads van de Benelux-app en de Duitse app staan los van elkaar, ook als je ze in dezelfde browser opent.
 
