@@ -1,7 +1,7 @@
 // Run with: npm test
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createStore, STORAGE_KEY, splitLegacyCategory, normalizeNames, normalizeCountry, groupKey } = require("../docs/store.js");
+const { createStore, STORAGE_KEY, splitLegacyCategory, normalizeNames, normalizeCountry, normalizeBrands, groupKey } = require("../docs/store.js");
 
 function memoryStorage() {
   const data = new Map();
@@ -28,7 +28,8 @@ test("lead CRUD with activity log", async () => {
 
   const act = await store.request("POST", `leads/${lead.id}/activities`, { type: "telefoon", text: "Gebeld" });
   const acts = await store.request("GET", `leads/${lead.id}/activities`);
-  assert.deepEqual(acts.map((a) => a.type).sort(), ["status", "system", "telefoon"]);
+  // The status is hidden for now, so a status change is not logged.
+  assert.deepEqual(acts.map((a) => a.type).sort(), ["system", "telefoon"]);
 
   await store.request("DELETE", `activities/${act.id}`);
   await store.request("DELETE", `leads/${lead.id}`);
@@ -58,11 +59,11 @@ test("old statuses and Domein values are migrated", async () => {
   const store = createStore(storage);
   const leads = await store.request("GET", "leads");
   assert.deepEqual(leads.map((l) => l.status), ["samenwerking", "geen", "gesprek"]);
-  assert.deepEqual(leads.map(groupKey), ["Dealer › GaLa Bau", "Ambassadeur", "Certified Assembler › Monteur-verkoper"]);
+  assert.deepEqual(leads.map((l) => groupKey(l, true)), ["Dealer › GaLa Bau", "Ambassadeur", "Certified Assembler › Monteur-verkoper"]);
+  assert.deepEqual(leads.map((l) => groupKey(l)), ["Dealer", "Ambassadeur", "Certified Assembler"], "subcategories are hidden");
   const s = await store.request("GET", "settings");
-  assert.deepEqual(s.excluded_categories, ["Ambassadeur", "Certified Assembler › Monteur-verkoper"]);
-  assert.equal(s.category_colors["Dealer › GaLa Bau"], "#c2410c");
-  assert.equal(s.category_colors["Ambassadeur"], "#f29bd0");
+  assert.deepEqual(s.excluded_categories, ["Ambassadeur", "Certified Assembler"]);
+  assert.equal(s.category_colors["Ambassadeur"], "#d147a3");
 
   // Migration runs once: a later edit is not split again.
   await store.request("PUT", "leads/1", { category: "Dealer", subcategory: "" });
@@ -80,34 +81,54 @@ test("version 3 data is renamed (Ambassador, Specialisatie, Beurs)", async () =>
     ],
   }));
   const store = createStore(storage);
-  assert.deepEqual((await store.request("GET", "leads")).map(groupKey), ["Ambassadeur", "Dealer › Gespecialiseerd"]);
+  assert.deepEqual((await store.request("GET", "leads")).map((l) => groupKey(l, true)), ["Ambassadeur", "Dealer › Gespecialiseerd"]);
   const s = await store.request("GET", "settings");
-  assert.deepEqual(s.excluded_categories, ["Ambassadeur", "Beurs", "Beurs › Bezoek", "Beurs › Deelname"]);
-  assert.equal(s.category_colors["Dealer › Gespecialiseerd"], "#d32f2f");
+  assert.deepEqual(s.excluded_categories, ["Ambassadeur", "Beurs"]);
 });
 
-test("spelling variants map to the existing (sub)categories", async () => {
-  assert.deepEqual(normalizeNames("Certified assembler", "monteur"), ["Certified Assembler", "Monteur"]);
-  assert.deepEqual(normalizeNames(" certified  Assembler ", "Monteur - verkoper"), ["Certified Assembler", "Monteur-verkoper"]);
-  assert.deepEqual(normalizeNames("Certified Assembler Monteur", ""), ["Certified Assembler", "Monteur"]);
-  assert.deepEqual(normalizeNames("dealer", "Galabau"), ["Dealer", "GaLa Bau"]);
+test("spelling variants map to the existing categories", async () => {
+  assert.deepEqual(normalizeNames("premium  DEALER", ""), ["Premium Dealer", ""]);
+  assert.deepEqual(normalizeNames("Certified assembler", ""), ["Certified Assembler", ""]);
+  assert.deepEqual(normalizeNames("ambassador", ""), ["Ambassadeur", ""]);
+  assert.deepEqual(normalizeNames("dealer", "Galabau"), ["Dealer", "Galabau"], "subcategory is kept in the data");
   assert.deepEqual(normalizeNames("Iets anders", "x"), ["Iets anders", "x"]);
+  const store = createStore(memoryStorage());
+  const lead = await store.request("POST", "leads", { company: "C", category: "PREMIUM dealer" });
+  assert.equal(groupKey(lead), "Premium Dealer");
+});
 
-  // Stored version 4 data with a variant is merged into the existing category.
+test("version 7 data gets the partner categories and colours", async () => {
   const storage = memoryStorage();
   storage.setItem(STORAGE_KEY, JSON.stringify({
-    version: 4, next_lead_id: 3, next_activity_id: 1, activities: [], settings: {},
-    leads: [
-      { id: 1, company: "A", status: "gesprek", category: "Certified assembler", subcategory: "Monteur verkoper" },
-      { id: 2, company: "B", status: "gesprek", category: "Certified Assembler", subcategory: "Monteur" },
-    ],
+    version: 7, next_lead_id: 2, next_activity_id: 1, activities: [],
+    settings: { category_colors: { "Dealer": "#d147a3", "Iets eigens": "#123456" }, excluded_categories: ["Beurs › Bezoek", "Ambassadeur"] },
+    leads: [{ id: 1, company: "A", status: "gesprek", category: "Dealer", subcategory: "GaLa Bau" }],
   }));
   const store = createStore(storage);
-  assert.deepEqual((await store.request("GET", "leads")).map(groupKey),
-    ["Certified Assembler › Monteur-verkoper", "Certified Assembler › Monteur"]);
-  // New input is normalised too.
-  const lead = await store.request("POST", "leads", { company: "C", category: "CERTIFIED ASSEMBLER", subcategory: "monteur" });
-  assert.equal(groupKey(lead), "Certified Assembler › Monteur");
+  const [lead] = await store.request("GET", "leads");
+  assert.equal(lead.subcategory, "GaLa Bau", "subcategory is kept");
+  assert.deepEqual(lead.competitor_brands, []);
+  const s = await store.request("GET", "settings");
+  assert.deepEqual(["Dealer", "Premium Dealer", "Certified Assembler", "Ambassadeur"].map((c) => s.category_colors[c]),
+    ["#2563eb", "#d4a017", "#8c5a3c", "#d147a3"]);
+  assert.equal(s.category_colors["Iets eigens"], "#123456", "own colours are kept");
+  assert.deepEqual(s.excluded_categories, ["Beurs", "Ambassadeur"]);
+});
+
+test("competitor brands", async () => {
+  assert.deepEqual(normalizeBrands("janssens, ROYAL WELL; Nieuw  merk/janssens"), ["Janssens", "Royal Well", "Nieuw merk"]);
+  assert.deepEqual(normalizeBrands(["KGT", " ", "kgt", "Vitavia"]), ["KGT", "Vitavia"]);
+  assert.deepEqual(normalizeBrands(undefined), []);
+  const store = createStore(memoryStorage());
+  const lead = await store.request("POST", "leads", { company: "A", competitor_brands: ["lams", "Hoklartherm"] });
+  assert.deepEqual(lead.competitor_brands, ["Lams", "Hoklartherm"]);
+  const b = await store.request("POST", "leads", { company: "B" });
+  assert.deepEqual(b.competitor_brands, []);
+  const updated = await store.request("PUT", `leads/${lead.id}`, { competitor_brands: [] });
+  assert.deepEqual(updated.competitor_brands, []);
+  store.importLeads([{ data: { company: "C", competitor_brands: "Euroserre, Fillclair" } }]);
+  const c = (await store.request("GET", "leads")).find((l) => l.company === "C");
+  assert.deepEqual(c.competitor_brands, ["Euroserre", "Fillclair"]);
 });
 
 test("version 5 colours for Gartencenter, GaLa Bau and Gespecialiseerd are updated", async () => {
@@ -119,7 +140,7 @@ test("version 5 colours for Gartencenter, GaLa Bau and Gespecialiseerd are updat
   const c = (await createStore(storage).request("GET", "settings")).category_colors;
   assert.deepEqual([c["Dealer › Gartencenter"], c["Dealer › GaLa Bau"], c["Dealer › Gespecialiseerd"]], ["#1b5e20", "#c2410c", "#d32f2f"]);
   assert.equal(c["Dealer › Online retailer"], "#0fa3b1");
-  assert.equal(c["Ambassadeur"], "#123456", "other colours are kept");
+  assert.equal(c["Ambassadeur"], "#d147a3", "version 8 sets the colours of the four categories");
 });
 
 test("country: names are normalised; Luxembourg is known", async () => {
@@ -168,7 +189,8 @@ test("settings and category colours", async () => {
   await store.request("POST", "leads", { company: "B", category: "Iets nieuws" });
   await store.request("POST", "leads", { company: "C" });
   s = await store.request("GET", "settings");
-  assert.equal(s.category_colors["Dealer › GaLa Bau"], "#c2410c");
+  assert.equal(s.category_colors["Dealer"], "#2563eb");
+  assert.equal(s.category_colors["Premium Dealer"], "#d4a017");
   assert.match(s.category_colors["Iets nieuws"], /^#[0-9a-f]{6}$/);
   assert.ok(s.category_colors["Zonder categorie"]);
 
@@ -178,7 +200,7 @@ test("settings and category colours", async () => {
   assert.equal(s.min_distance_km, 20);
   assert.deepEqual(s.excluded_categories, ["Iets nieuws"]);
   assert.equal(s.category_colors["Iets nieuws"], "#123456");
-  assert.equal(s.category_colors["Dealer › GaLa Bau"], "#c2410c");
+  assert.equal(s.category_colors["Dealer"], "#2563eb");
 });
 
 test("importLeads creates and updates by company name", async () => {

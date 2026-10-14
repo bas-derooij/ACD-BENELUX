@@ -216,6 +216,18 @@ fieldset input, fieldset select, fieldset textarea {
   padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--panel);
 }
 fieldset textarea { resize: vertical; }
+.field-note { margin: -4px 0 0; font-size: 12px; color: var(--muted); }
+.brand-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+fieldset .brand-choices label {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border);
+  border-radius: 14px; cursor: pointer; color: var(--text); background: var(--panel); user-select: none;
+}
+fieldset .brand-choices label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); font-weight: 500; }
+fieldset .brand-choices input { margin: 0; padding: 0; }
+.brand-add { display: flex; gap: 6px; }
+.brand-add input { flex: 1; min-width: 0; }
+.brands { font-size: 12px; color: var(--muted); }
+.brands b { font-weight: 500; color: var(--text); }
 .geo-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .coords { font-size: 12px; color: var(--muted); }
 .geo-results { list-style: none; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 6px; max-height: 180px; overflow: auto; }

@@ -1,4 +1,7 @@
-/* ACD Benelux – browser storage for leads, activities and settings.
+/* ACD Benelux – browser storage for partners, activities and settings.
+ *
+ * Internally a partner is still called a "lead" (field names, storage key, API paths),
+ * so backups of earlier versions and of the Germany app keep working.
  *
  * Everything is kept in the browser's localStorage, so the app runs without a
  * server. `request(method, path, body)` mirrors a small REST API so the UI code
@@ -28,26 +31,31 @@
     last_visit: "str",      // Laatste bezoek
     demo_serre: "str",      // Demo-serre
     notes: "str",           // Notitie
+    competitor_brands: "list", // Concurrerende merken die de partner ook verkoopt
   };
+  // Subcategory and status are kept in the data but not shown in the app for now;
+  // set these to true to bring them back (filters, legend, form, Excel).
+  const SHOW_SUBCATEGORIES = false;
+  const SHOW_STATUS = false;
+  // Competing brands offered in the form; brands typed by the user are added to the list.
+  const COMPETITOR_BRANDS = ["Janssens", "Euroserre", "Fillclair", "Royal Well", "Juliana",
+    "Hoklartherm", "KGT", "Vitavia", "Lams"];
   // Categories and their subcategories, in display order.
   const TAXONOMY = [
-    ["Dealer", ["Gartencenter", "GaLa Bau", "Gespecialiseerd", "Online retailer"]],
-    ["Certified Assembler", ["Monteur", "Monteur-verkoper"]],
+    ["Dealer", []],
+    ["Premium Dealer", []],
+    ["Certified Assembler", []],
     ["Ambassadeur", []],
-    ["Beurs", ["Bezoek", "Deelname"]],
   ];
   // Categories shown in the category filter but not in the map legend.
-  const HIDDEN_IN_LEGEND = ["Beurs"];
+  const HIDDEN_IN_LEGEND = [];
   // Earlier names -> current names.
   const CATEGORY_ALIASES = { "ambassador": "Ambassadeur", "merkambassadeur": "Ambassadeur" };
   const SUBCATEGORY_ALIASES = { "specialisatie": "Gespecialiseerd" };
   const SEP = " › ";
   // Groups (category, or "category › subcategory") that do not count in the
   // "too close" check unless the user turns them on.
-  const DEFAULT_EXCLUDED_CATEGORIES = [
-    "Ambassadeur", "Certified Assembler", "Certified Assembler › Monteur",
-    "Certified Assembler › Monteur-verkoper", "Beurs", "Beurs › Bezoek", "Beurs › Deelname",
-  ];
+  const DEFAULT_EXCLUDED_CATEGORIES = ["Ambassadeur", "Certified Assembler"];
   const DEFAULT_SETTINGS = {
     min_distance_km: 50,
     ignore_statuses: ["geen"],
@@ -56,15 +64,17 @@
   };
   // Pin fill colour per group.
   const KNOWN_CATEGORY_COLORS = {
+    "Dealer": "#2563eb",                   // blue
+    "Premium Dealer": "#d4a017",           // gold
+    "Certified Assembler": "#8c5a3c",      // brown
+    "Ambassadeur": "#d147a3",              // pink
+    // Earlier subcategories (only used when data from older versions is migrated).
     "Dealer › GaLa Bau": "#c2410c",        // dark orange
     "Dealer › Gartencenter": "#1b5e20",    // dark green
     "Dealer › Online retailer": "#0fa3b1",
     "Dealer › Gespecialiseerd": "#d32f2f", // red
-    "Dealer": "#d147a3",
     "Certified Assembler › Monteur": "#8c5a3c",
     "Certified Assembler › Monteur-verkoper": "#d97706",
-    "Certified Assembler": "#78716c",
-    "Ambassadeur": "#f29bd0",
     "Beurs": "#111827",
     "Beurs › Bezoek": "#111827",
     "Beurs › Deelname": "#57534e",
@@ -84,9 +94,9 @@
     "beurs bezoek": ["Beurs", "Bezoek"],
     "beurs deelname": ["Beurs", "Deelname"],
   };
-  const DATA_VERSION = 7;
+  const DATA_VERSION = 8;
 
-  // Countries a lead can be in (ISO code -> name shown in the app).
+  // Countries a partner can be in (ISO code -> name shown in the app).
   const COUNTRIES = { NL: "Nederland", BE: "België", LU: "Luxemburg", DE: "Duitsland", FR: "Frankrijk" };
   const COUNTRY_ALIASES = {
     de: "DE", duitsland: "DE", deutschland: "DE", germany: "DE", allemagne: "DE",
@@ -145,9 +155,22 @@
     return [v, ""];
   }
 
-  function groupKey(lead) {
+  // Brands as a clean list: split on , ; / or new lines, no duplicates, known brands spelled as in the list.
+  function normalizeBrands(value) {
+    const parts = Array.isArray(value) ? value : String(value ?? "").split(/[,;/\n]+/);
+    const out = [];
+    for (const part of parts) {
+      const name = tidy(part);
+      if (!name || out.some((b) => loose(b) === loose(name))) continue;
+      out.push(COMPETITOR_BRANDS.find((b) => loose(b) === loose(name)) || name);
+    }
+    return out;
+  }
+
+  // A partner's group: "Categorie › Subcategorie" (when subcategories are shown), or the category.
+  function groupKey(lead, withSubcategory = SHOW_SUBCATEGORIES) {
     const cat = (lead.category || "").trim() || NO_CATEGORY;
-    const sub = (lead.subcategory || "").trim();
+    const sub = withSubcategory ? (lead.subcategory || "").trim() : "";
     return sub ? cat + SEP + sub : cat;
   }
 
@@ -174,6 +197,7 @@
       if (!STATUSES.includes(lead.status)) lead.status = OLD_STATUS[lead.status] || "gesprek";
       if (lead.category === undefined) lead.category = "";
       if (lead.subcategory === undefined) lead.subcategory = "";
+      lead.competitor_brands = normalizeBrands(lead.competitor_brands);
     }
     const version = db.version || 0;
     if (version >= DATA_VERSION) return db;
@@ -200,7 +224,7 @@
       }
       renameKeys((old) => {
         const [category, subcategory] = splitLegacyCategory(old);
-        return groupKey({ category, subcategory });
+        return groupKey({ category, subcategory }, true);
       });
     }
     // Versions 4-5: names follow the taxonomy (Ambassadeur, Gespecialiseerd, spelling variants).
@@ -209,7 +233,7 @@
     }
     renameKeys((key) => {
       const [category, subcategory] = normalizeNames(...key.split(SEP));
-      return groupKey({ category, subcategory });
+      return groupKey({ category, subcategory }, true);
     });
     if (settings.excluded_categories && settings.excluded_categories.includes("Beurs")) {
       settings.excluded_categories = [...new Set([...settings.excluded_categories, "Beurs › Bezoek", "Beurs › Deelname"])];
@@ -223,6 +247,16 @@
         if (!lead.country) lead.country = AUSTRIAN_STATES.has(loose(lead.state)) ? "AT" : "";
       }
     }
+    if (version < 8) {
+      // Version 8: partner tracker with the categories Dealer, Premium Dealer, Certified Assembler
+      // and Ambassadeur, each with its own colour; subcategories are no longer shown.
+      if (settings.category_colors) {
+        for (const [category] of TAXONOMY) settings.category_colors[category] = KNOWN_CATEGORY_COLORS[category];
+      }
+      if (Array.isArray(settings.excluded_categories)) {
+        settings.excluded_categories = [...new Set(settings.excluded_categories.map((k) => k.split(SEP)[0]))];
+      }
+    }
     db.version = DATA_VERSION;
     return db;
   }
@@ -233,7 +267,9 @@
     for (const [key, kind] of Object.entries(LEAD_FIELDS)) {
       if (!(key in data)) continue;
       const value = data[key];
-      if (kind === "float") {
+      if (kind === "list") {
+        out[key] = normalizeBrands(value);
+      } else if (kind === "float") {
         if (value === null || value === undefined || String(value).trim() === "") out[key] = null;
         else {
           const n = Number(String(value).trim().replace(",", "."));
@@ -329,9 +365,9 @@
       return act;
     }
 
-    function createLead(db, data, logText = "Lead aangemaakt") {
+    function createLead(db, data, logText = "Partner aangemaakt") {
       const lead = {};
-      for (const [key, kind] of Object.entries(LEAD_FIELDS)) lead[key] = kind === "float" ? null : "";
+      for (const [key, kind] of Object.entries(LEAD_FIELDS)) lead[key] = kind === "float" ? null : kind === "list" ? [] : "";
       lead.status = "gesprek";
       Object.assign(lead, cleanLead(data));
       const ts = nowIso();
@@ -346,7 +382,7 @@
       const changes = cleanLead(data, true);
       if (!Object.keys(changes).length) return lead;
       const ts = nowIso();
-      if ("status" in changes && changes.status !== lead.status) {
+      if (SHOW_STATUS && "status" in changes && changes.status !== lead.status) {
         addActivityRow(db, lead.id, "status",
           `Status gewijzigd van '${lead.status}' naar '${changes.status}'`, ts);
       }
@@ -410,7 +446,7 @@
             updateLead(db, existing, data);
             updated++;
           } else {
-            const lead = createLead(db, row.data, "Lead geïmporteerd uit Excel");
+            const lead = createLead(db, row.data, "Partner geïmporteerd uit Excel");
             byCompany.set(companyKey(lead.company), lead);
             created++;
           }
@@ -422,7 +458,7 @@
       return { created, updated, errors };
     }
 
-    // Remove all leads and their activity logs; settings (colours, distance check) are kept.
+    // Remove all partners and their activity logs; settings (colours, distance check) are kept.
     function clearLeads() {
       const db = load();
       const removed = db.leads.length;
@@ -461,7 +497,7 @@
       if ((m = path.match(/^leads\/(\d+)$/))) {
         const id = Number(m[1]);
         const lead = db.leads.find((l) => l.id === id);
-        if (!lead) throw notFound("Lead niet gevonden");
+        if (!lead) throw notFound("Partner niet gevonden");
         if (method === "GET") return lead;
         if (method === "PUT") { updateLead(db, lead, body); save(db); return lead; }
         if (method === "DELETE") {
@@ -475,7 +511,7 @@
       if ((m = path.match(/^leads\/(\d+)\/activities$/))) {
         const id = Number(m[1]);
         const lead = db.leads.find((l) => l.id === id);
-        if (!lead) throw notFound("Lead niet gevonden");
+        if (!lead) throw notFound("Partner niet gevonden");
         if (method === "GET") {
           return db.activities.filter((a) => a.lead_id === id)
             .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id);
@@ -513,8 +549,9 @@
   }
 
   const api = {
-    createStore, groupKey, splitLegacyCategory, normalizeNames, normalizeCountry, COUNTRIES,
+    createStore, groupKey, splitLegacyCategory, normalizeNames, normalizeCountry, normalizeBrands, COUNTRIES,
     STATUSES, LEAD_FIELDS, STORAGE_KEY, NO_CATEGORY, TAXONOMY, HIDDEN_IN_LEGEND, SEP,
+    SHOW_SUBCATEGORIES, SHOW_STATUS, COMPETITOR_BRANDS,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.LeadStore = api;
