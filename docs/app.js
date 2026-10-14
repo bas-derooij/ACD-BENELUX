@@ -1,4 +1,4 @@
-/* ACD Benelux – lead manager (frontend) */
+/* ACD Benelux – partner tracker (frontend). Internally a partner is still called a "lead". */
 "use strict";
 
 // Status = colour code of column J in the roadmap sheet (ring around the pin).
@@ -8,13 +8,17 @@ const STATUS_INFO = {
   geen:         { label: "Geen samenwerking",  color: "#FF0000" },
 };
 const NO_CATEGORY = LeadStore.NO_CATEGORY;
-// Countries where leads can be: the Benelux and dealers just across the border (Germany, France).
+// Status and subcategory are kept in the data but hidden for now (see store.js).
+const SHOW_STATUS = LeadStore.SHOW_STATUS;
+const SHOW_SUBCATEGORIES = LeadStore.SHOW_SUBCATEGORIES;
+const PIN_BORDER = "#ffffff";
+// Countries where partners can be: the Benelux and dealers just across the border (Germany, France).
 const COUNTRIES = LeadStore.COUNTRIES;
 const ALL_COUNTRY_CODES = Object.keys(COUNTRIES).join(",").toLowerCase();
 const countryName = (code) => COUNTRIES[code] || code || "";
-// "Aachen (DE)": municipality with the country code for leads outside the Netherlands.
+// "Aachen (DE)": municipality with the country code for partners outside the Netherlands.
 const placeOf = (l) => (l.city || "?") + (l.country && l.country !== "NL" ? ` (${l.country})` : "");
-// Germany + Austria (the area shown when the app opens and after "Filters wissen").
+// The Benelux (the area shown when the app opens and after "Filters wissen").
 const REGION_BOUNDS = [[49.4, 2.5], [53.6, 7.3]];
 const CONFLICT_COLOR = "#c62828";
 
@@ -30,7 +34,7 @@ const state = {
   drawerOpenedAt: 0,
   geocoding: null,        // { stop: boolean } while locations are being looked up
   // Selected filters; an empty set means "everything".
-  filter: { groups: new Set(), statuses: new Set() },
+  filter: { groups: new Set(), statuses: new Set(), brands: new Set() },
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -42,7 +46,18 @@ const statusOf = (s) => STATUS_INFO[s] || { label: s, color: "#999" };
 // A lead's group: "Categorie › Subcategorie", or only the category. Drives colour, filters and checks.
 const categoryOf = (l) => LeadStore.groupKey(l);
 const colorOf = (cat) => state.settings.category_colors[cat] || "#64748b";
-const isDealer = (key) => key === "Dealer" || key.startsWith("Dealer" + LeadStore.SEP);
+// Dealer and Premium Dealer (with or without subcategory).
+const isDealer = (key) => /^(premium )?dealer($| › )/i.test(key);
+// Dealers and premium dealers are compared with each other for "nearest"; other categories with their own.
+const familyOf = (l) => (isDealer(l.category || "") ? "dealer" : (l.category || NO_CATEGORY));
+const brandsOf = (l) => l.competitor_brands || [];
+// Brand list: the fixed list first, then brands typed in for a partner (alphabetically).
+function allBrands() {
+  const extra = new Set();
+  for (const l of state.leads) for (const b of brandsOf(l)) if (!LeadStore.COMPETITOR_BRANDS.includes(b)) extra.add(b);
+  return [...LeadStore.COMPETITOR_BRANDS, ...[...extra].sort((a, b) => a.localeCompare(b, "nl", { sensitivity: "base" }))];
+}
+const brandsHtml = (l) => (brandsOf(l).length ? `<b>Concurrerende merken:</b> ${esc(brandsOf(l).join(", "))}` : "");
 
 /* ---------------- storage & helpers ---------------- */
 // All data lives in this browser (localStorage), see store.js.
@@ -136,9 +151,9 @@ function haversineKm(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-// Does this lead take part in the "too close" check?
+// Does this partner take part in the "too close" check?
 function counts(lead) {
-  return !state.settings.ignore_statuses.includes(lead.status) &&
+  return !(SHOW_STATUS && state.settings.ignore_statuses.includes(lead.status)) &&
     !state.settings.excluded_categories.includes(categoryOf(lead));
 }
 
@@ -153,8 +168,8 @@ function computeDistances() {
     for (let j = i + 1; j < located.length; j++) {
       const b = located[j];
       const km = haversineKm(a.lat, a.lng, b.lat, b.lng);
-      // Nearest lead within the same category (a dealer is compared with dealers only).
-      if ((a.category || NO_CATEGORY) === (b.category || NO_CATEGORY)) {
+      // Nearest partner of the same kind (a dealer is compared with (premium) dealers only).
+      if (familyOf(a) === familyOf(b)) {
         for (const [x, y] of [[a, b], [b, a]]) {
           const cur = state.nearest.get(x.id);
           if (!cur || km < cur.km) state.nearest.set(x.id, { lead: y, km });
@@ -279,10 +294,10 @@ function renderMap() {
         fill: false, interactive: false,
       }).addTo(layers.markers);
     }
-    // Fill = (sub)categorie, ring = status (column J).
+    // Fill = categorie, ring = status (white while the status is hidden).
     const marker = L.circleMarker([lead.lat, lead.lng], {
       radius: selected ? 11 : 8,
-      color: statusOf(lead.status).color, weight: 4,
+      color: SHOW_STATUS ? statusOf(lead.status).color : PIN_BORDER, weight: SHOW_STATUS ? 4 : 2.5,
       fillColor: fill, fillOpacity: 1, bubblingMouseEvents: false,
     }).addTo(layers.markers);
     marker.bindTooltip(esc(lead.company), { direction: "top", offset: [0, -10] });
@@ -291,7 +306,7 @@ function renderMap() {
     markerById.set(lead.id, marker);
   }
 
-  // Small number next to pins that hide other visible leads at the same spot.
+  // Small number next to pins that hide other visible partners at the same spot.
   for (const group of stacks.values()) {
     if (group.length < 2) continue;
     L.marker([group[0].lat, group[0].lng], {
@@ -325,6 +340,7 @@ function nearListHtml(near, min) {
 }
 
 function statusBadge(status) {
+  if (!SHOW_STATUS) return "";
   const info = statusOf(status);
   return `<span class="badge status-${esc(status)}" style="background:${info.color}">${esc(info.label)}</span>`;
 }
@@ -341,20 +357,21 @@ function leadPopup(lead) {
     <p>${statusBadge(lead.status)} <span class="cat-chip"><i style="background:${colorOf(cat)}"></i>${esc(cat)}</span></p>
     <p>${esc([lead.city, lead.state, lead.country && lead.country !== "NL" ? countryName(lead.country) : ""].filter(Boolean).join(", "))}</p>
     ${lead.contact_name ? `<p>${esc(lead.contact_name)}${lead.phone ? " · " + esc(lead.phone) : ""}</p>` : ""}
+    ${brandsOf(lead).length ? `<p class="brands">${brandsHtml(lead)}</p>` : ""}
     ${lead.status_info ? `<p class="muted">${esc(lead.status_info)}</p>` : ""}
-    ${near.length ? `<strong>Dichtstbijzijnde leads</strong>${nearListHtml(near, min)}` : ""}
-    <button class="btn small" type="button" data-open="${lead.id}">Lead openen</button>
+    ${near.length ? `<strong>Dichtstbijzijnde partners</strong>${nearListHtml(near, min)}` : ""}
+    <button class="btn small" type="button" data-open="${lead.id}">Partner openen</button>
     ${others.length ? `<div class="stack-list"><strong>Ook op deze plek (${others.length})</strong>
       ${others.map((o) => `<button type="button" class="stack-item" data-open="${o.id}">
-        <i style="background:${colorOf(categoryOf(o))};border-color:${statusOf(o.status).color}"></i>${esc(o.company)}</button>`).join("")}
+        <i style="background:${colorOf(categoryOf(o))};border-color:${SHOW_STATUS ? statusOf(o.status).color : PIN_BORDER}"></i>${esc(o.company)}</button>`).join("")}
       </div>` : ""}`;
   div.querySelectorAll("[data-open]").forEach((btn) => btn.addEventListener("click", () =>
     openDrawer(state.leads.find((l) => l.id === Number(btn.dataset.open)))));
   return div;
 }
 
-// Popup that shows which leads lie near a location, with a button to create a lead there.
-// prefill: optional form values for the new lead (e.g. city and postcode of a searched place).
+// Popup that shows which partners lie near a location, with a button to create a partner there.
+// prefill: optional form values for the new partner (e.g. city and postcode of a searched place).
 function showLocationCheck(latlng, { title = "Deze locatie controleren", prefill = null, limit = 3 } = {}) {
   const { lat, lng } = latlng;
   const near = nearestTo(lat, lng, null, limit);
@@ -364,13 +381,13 @@ function showLocationCheck(latlng, { title = "Deze locatie controleren", prefill
   div.className = "popup";
   div.innerHTML = `
     <h4>${esc(title)}</h4>
-    ${near.length ? `<strong>Dichtstbijzijnde leads</strong><ul class="near-list">${near.map((n) =>
+    ${near.length ? `<strong>Dichtstbijzijnde partners</strong><ul class="near-list">${near.map((n) =>
       `<li class="${n.km < min && counts(n.lead) ? "bad" : ""}">${esc(n.lead.company)}
         <span class="muted">(${esc(categoryOf(n.lead))})</span> – ${fmtKm(n.km)}</li>`).join("")}</ul>`
-      : "<p>Nog geen leads op de kaart.</p>"}
-    <p>${within.length ? `<span class="bad">⚠ ${within.length} lead(s) binnen ${min} km die meetellen in de afstandscheck</span>`
-      : `✓ Geen lead binnen ${min} km die meetelt in de afstandscheck`}</p>
-    <button class="btn small" type="button">+ Nieuwe lead hier</button>`;
+      : "<p>Nog geen partners op de kaart.</p>"}
+    <p>${within.length ? `<span class="bad">⚠ ${within.length} partner(s) binnen ${min} km die meetellen in de afstandscheck</span>`
+      : `✓ Geen partner binnen ${min} km die meetelt in de afstandscheck`}</p>
+    <button class="btn small" type="button">+ Nieuwe partner hier</button>`;
   div.querySelector("button").addEventListener("click", () => {
     map.closePopup();
     openDrawer(null, { lat, lng }, prefill);
@@ -444,17 +461,17 @@ async function searchPlace(e) {
 }
 
 function renderLegend() {
-  // Some categories (Beurs) are only in the category filter, not in the legend.
+  // Categories in HIDDEN_IN_LEGEND are only in the category filter, not in the legend.
   const legendGroups = groupsInUse().filter((g) => !LeadStore.HIDDEN_IN_LEGEND.includes(g.category));
   $("#legendBody").innerHTML = `
     <div class="legend-title">Categorie (vulling)</div>
     ${legendGroups.length ? groupedHtml((g, label, sub) => `<label class="legend-item${sub ? " sub" : " single"}" title="Klik om de kleur te wijzigen">
         <input type="color" class="cat-color" data-cat="${esc(g.key)}" value="${colorOf(g.key)}">
         <span>${esc(label)} <span class="muted">(${g.n})</span></span></label>`, legendGroups)
-      : `<div class="legend-item muted">Nog geen leads</div>`}
-    <div class="legend-title">Status (rand)</div>
+      : `<div class="legend-item muted">Nog geen partners</div>`}
+    ${SHOW_STATUS ? `<div class="legend-title">Status (rand)</div>
     ${Object.entries(STATUS_INFO).filter(([k]) => k !== "geen").map(([, s]) =>
-      `<div class="legend-item"><i class="ring" style="border-color:${s.color}"></i>${esc(s.label)}</div>`).join("")}
+      `<div class="legend-item"><i class="ring" style="border-color:${s.color}"></i>${esc(s.label)}</div>`).join("")}` : ""}
     <div class="legend-title">Kaart</div>
     <div class="legend-item"><i class="halo"></i>Te dicht bij elkaar</div>
     <div class="legend-item"><i class="line"></i>Grenzen Benelux</div>`;
@@ -471,13 +488,15 @@ function renderLegend() {
 /* ---------------- sidebar ---------------- */
 function filteredLeads() {
   const q = $("#search").value.trim().toLowerCase();
-  const { groups, statuses } = state.filter;
+  const { groups, statuses, brands } = state.filter;
   return state.leads.filter((l) => {
-    if (statuses.size && !statuses.has(l.status)) return false;
+    if (SHOW_STATUS && statuses.size && !statuses.has(l.status)) return false;
     if (groups.size && !groups.has(categoryOf(l))) return false;
+    // Brand filter: partners that sell at least one of the chosen brands.
+    if (brands.size && !brandsOf(l).some((b) => brands.has(b))) return false;
     if (!q) return true;
-    return [l.company, l.city, l.contact_name, l.state, countryName(l.country), l.email, l.category, l.subcategory, l.status_info,
-      l.next_action, l.notes, l.demo_serre]
+    return [l.company, l.city, l.contact_name, l.state, countryName(l.country), l.email, l.category,
+      SHOW_SUBCATEGORIES ? l.subcategory : "", l.status_info, l.next_action, l.notes, l.demo_serre, brandsOf(l).join(" ")]
       .some((v) => (v || "").toLowerCase().includes(q));
   });
 }
@@ -496,7 +515,7 @@ function sortedLeads(list) {
 }
 
 function renderFilters() {
-  const { groups: selGroups, statuses: selStatuses } = state.filter;
+  const { groups: selGroups, statuses: selStatuses, brands: selBrands } = state.filter;
   const perCategory = new Map();
   for (const g of groupsInUse()) {
     if (!perCategory.has(g.category)) perCategory.set(g.category, []);
@@ -525,13 +544,14 @@ function renderFilters() {
     }
   }
   const catBox = $("#categoryFilter");
-  catBox.querySelector(".multi-panel").innerHTML = html || `<p class="muted">Nog geen leads</p>`;
+  catBox.querySelector(".multi-panel").innerHTML = html || `<p class="muted">Nog geen partners</p>`;
   catBox.querySelectorAll("[data-partial]").forEach((cb) => { cb.indeterminate = true; });
   catBox.querySelector("summary").textContent = selGroups.size === 0 ? "Alle categorieën"
     : selGroups.size === 1 ? [...selGroups][0] : `${selGroups.size} (sub)categorieën`;
   catBox.classList.toggle("active", selGroups.size > 0);
 
   const statusBox = $("#statusFilter");
+  statusBox.hidden = !SHOW_STATUS;
   statusBox.querySelector(".multi-panel").innerHTML = Object.entries(STATUS_INFO).map(([k, s]) =>
     `<label><input type="checkbox" data-status="${k}" ${selStatuses.has(k) ? "checked" : ""}>
       <i class="swatch" style="background:${s.color}"></i>${esc(s.label)}
@@ -539,6 +559,14 @@ function renderFilters() {
   statusBox.querySelector("summary").textContent = selStatuses.size === 0 ? "Alle statussen"
     : selStatuses.size === 1 ? STATUS_INFO[[...selStatuses][0]].label : `${selStatuses.size} statussen`;
   statusBox.classList.toggle("active", selStatuses.size > 0);
+
+  const brandBox = $("#brandFilter");
+  brandBox.querySelector(".multi-panel").innerHTML = allBrands().map((b) =>
+    `<label><input type="checkbox" data-brand="${esc(b)}" ${selBrands.has(b) ? "checked" : ""}>${esc(b)}
+      <span class="muted">(${state.leads.filter((l) => brandsOf(l).includes(b)).length})</span></label>`).join("");
+  brandBox.querySelector("summary").textContent = selBrands.size === 0 ? "Alle merken"
+    : selBrands.size === 1 ? [...selBrands][0] : `${selBrands.size} merken`;
+  brandBox.classList.toggle("active", selBrands.size > 0);
   updateFilterSummary();
 
   const allCategories = [...new Set([...LeadStore.TAXONOMY.map(([c]) => c), ...perCategory.keys()])]
@@ -547,21 +575,23 @@ function renderFilters() {
 }
 
 function filtersActive() {
-  return state.filter.groups.size + state.filter.statuses.size + ($("#search").value.trim() ? 1 : 0);
+  return state.filter.groups.size + state.filter.statuses.size + state.filter.brands.size + ($("#search").value.trim() ? 1 : 0);
 }
 
 function updateFilterSummary() {
   const active = filtersActive();
   const shown = active ? filteredLeads().length : state.leads.length;
-  $("#filterSummary").textContent = active ? `${shown} van ${state.leads.length} leads getoond` : "";
+  $("#filterSummary").textContent = active ? `${shown} van ${state.leads.length} partners getoond` : "";
   $("#clearFilters").hidden = !active;
 }
 
 // A checkbox in one of the filter dropdowns changed.
 function onFilterChange(e) {
   const cb = e.target;
-  const { groups, statuses } = state.filter;
-  if (cb.dataset.status) {
+  const { groups, statuses, brands } = state.filter;
+  if (cb.dataset.brand) {
+    cb.checked ? brands.add(cb.dataset.brand) : brands.delete(cb.dataset.brand);
+  } else if (cb.dataset.status) {
     cb.checked ? statuses.add(cb.dataset.status) : statuses.delete(cb.dataset.status);
   } else if (cb.dataset.category) {
     const keys = groupsInUse().filter((g) => g.category === cb.dataset.category).map((g) => g.key);
@@ -577,6 +607,7 @@ function onFilterChange(e) {
 function clearFilters() {
   state.filter.groups.clear();
   state.filter.statuses.clear();
+  state.filter.brands.clear();
   $("#search").value = "";
   document.querySelectorAll(".multi").forEach((d) => { d.open = false; });
   map.closePopup();
@@ -592,30 +623,32 @@ function renderList() {
   $("#leadCount").textContent = state.leads.length;
   if (!list.length) {
     $("#leadList").innerHTML = `<li class="empty">${state.leads.length
-      ? "Geen leads gevonden met deze filters."
-      : "Nog geen leads. Kies <b>Data → Importeren uit roadmap (Excel)</b>, klik op <b>+ Nieuwe lead</b> of klik op de kaart."}</li>`;
+      ? "Geen partners gevonden met deze filters."
+      : "Nog geen partners. Kies <b>Data → Importeren uit roadmap (Excel)</b>, klik op <b>+ Nieuwe partner</b> of klik op de kaart."}</li>`;
     return;
   }
   $("#leadList").innerHTML = list.map((l) => {
     const cat = categoryOf(l);
     const near = state.nearest.get(l.id);
     let nearHtml = "";
-    if (!hasGeo(l)) nearHtml = `<div class="near nogeo">⚠ Geen locatie – open de lead om de locatie te kiezen</div>`;
+    if (!hasGeo(l)) nearHtml = `<div class="near nogeo">⚠ Geen locatie – open de partner om de locatie te kiezen</div>`;
     else {
       const bad = near && near.km < min && counts(l) && counts(near.lead);
       if (near) {
-        nearHtml = `<div class="near ${bad ? "bad" : ""}">${bad ? "⚠ " : ""}Dichtstbijzijnde ${esc(l.category || NO_CATEGORY)}: ${esc(near.lead.company)} (${fmtKm(near.km)})</div>`;
+        const kind = familyOf(l) === "dealer" ? "dealer" : (l.category || NO_CATEGORY);
+        nearHtml = `<div class="near ${bad ? "bad" : ""}">${bad ? "⚠ " : ""}Dichtstbijzijnde ${esc(kind)}: ${esc(near.lead.company)} (${fmtKm(near.km)})</div>`;
       }
-      // Too close to a lead of another category that also counts in the check.
+      // Too close to a partner of another category that also counts in the check.
       if (state.conflictIds.has(l.id) && !bad) {
-        nearHtml += `<div class="near bad">⚠ Te dicht bij een lead uit een andere categorie – zie "Te dichtbij"</div>`;
+        nearHtml += `<div class="near bad">⚠ Te dicht bij een partner uit een andere categorie – zie "Te dichtbij"</div>`;
       }
     }
     return `<li class="lead-item ${l.id === state.selectedId ? "selected" : ""}" data-id="${l.id}">
-      <span class="dot" style="background:${colorOf(cat)};border-color:${statusOf(l.status).color}"></span>
+      <span class="dot" style="background:${colorOf(cat)};border-color:${SHOW_STATUS ? statusOf(l.status).color : colorOf(cat)}"></span>
       <span class="name">${esc(l.company)}</span>
       ${statusBadge(l.status)}
       <div class="sub">${esc(cat)} · ${esc(l.city ? placeOf(l) : "—")}${l.contact_name ? " · " + esc(l.contact_name) : ""}</div>
+      ${brandsOf(l).length ? `<div class="sub brands">${brandsHtml(l)}</div>` : ""}
       ${l.next_action ? `<div class="sub next">➜ ${esc(l.next_action)}${l.next_action_date ? " (" + esc(l.next_action_date.split("-").reverse().join("/")) + ")" : ""}</div>` : ""}
       ${nearHtml}
     </li>`;
@@ -630,17 +663,17 @@ function renderConflicts() {
   countEl.classList.toggle("alert", n > 0);
   const { excluded_categories: excluded, ignore_statuses: ignored } = state.settings;
   $("#conflictHint").innerHTML = `
-    <p>Paren van leads die minder dan <b>${min} km</b> van elkaar liggen (in vogelvlucht).</p>
+    <p>Paren van partners die minder dan <b>${min} km</b> van elkaar liggen (in vogelvlucht).</p>
     <details class="check-settings">
       <summary>Wie telt mee in de afstandscheck?</summary>
       <div class="check-group"><b>Categorieën</b>
         ${groupedHtml((g, label, sub) => `<label class="${sub ? "sub" : ""}"><input type="checkbox" class="countCategory" value="${esc(g.key)}"
           ${excluded.includes(g.key) ? "" : "checked"}> <i class="swatch" style="background:${colorOf(g.key)}"></i>${esc(label)}</label>`)}
       </div>
-      <div class="check-group"><b>Statussen</b>
+      ${SHOW_STATUS ? `<div class="check-group"><b>Statussen</b>
         ${Object.entries(STATUS_INFO).map(([k, s]) => `<label><input type="checkbox" class="countStatus" value="${k}"
           ${ignored.includes(k) ? "" : "checked"}> ${esc(s.label)}</label>`).join("")}
-      </div>
+      </div>` : ""}
     </details>`;
   document.querySelectorAll(".countCategory, .countStatus").forEach((cb) => cb.addEventListener("change", saveCheckSettings));
   $("#conflictList").innerHTML = n
@@ -649,7 +682,7 @@ function renderConflicts() {
         <div class="pair">${esc(c.a.company)} <span>(${esc(placeOf(c.a))}, ${esc(categoryOf(c.a))})</span></div>
         <div class="pair">↔ ${esc(c.b.company)} <span>(${esc(placeOf(c.b))}, ${esc(categoryOf(c.b))})</span></div>
       </li>`).join("")
-    : `<li class="empty">✓ Geen leads die dichter dan ${min} km bij elkaar liggen.</li>`;
+    : `<li class="empty">✓ Geen partners die dichter dan ${min} km bij elkaar liggen.</li>`;
 }
 
 async function saveCheckSettings() {
@@ -658,9 +691,9 @@ async function saveCheckSettings() {
   const shown = new Set(categoriesInUse().map(([c]) => c));
   const excluded = [...state.settings.excluded_categories.filter((c) => !shown.has(c)), ...unchecked("countCategory")];
   try {
-    state.settings = await api("settings", {
-      method: "PUT", body: { excluded_categories: excluded, ignore_statuses: unchecked("countStatus") },
-    });
+    const body = { excluded_categories: excluded };
+    if (SHOW_STATUS) body.ignore_statuses = unchecked("countStatus");
+    state.settings = await api("settings", { method: "PUT", body });
     renderAll();
     $(".check-settings").open = true;
   } catch (err) { toast(err.message, true); }
@@ -713,12 +746,37 @@ function updateSubcategoryOptions() {
   $("#subcategories").innerHTML = [...new Set([...known, ...used])].map((s) => `<option value="${esc(s)}">`).join("");
 }
 
+// Brand chips in the form: the brand list plus the brands of this partner, checked = sells it.
+function renderBrandChoices(selected) {
+  const names = [...allBrands()];
+  for (const b of selected) if (!names.some((n) => n.toLowerCase() === b.toLowerCase())) names.push(b);
+  $("#brandChoices").innerHTML = names.map((b) =>
+    `<label><input type="checkbox" class="brand-choice" value="${esc(b)}" ${selected.includes(b) ? "checked" : ""}>${esc(b)}</label>`).join("");
+}
+
+const checkedBrands = () => [...document.querySelectorAll(".brand-choice:checked")].map((cb) => cb.value);
+
+// "Ander merk toevoegen": a new brand is added to the chips and checked.
+function addBrandFromInput() {
+  const name = $("#newBrand").value.replace(/\s+/g, " ").trim();
+  if (!name) return;
+  const existing = [...document.querySelectorAll(".brand-choice")].find((cb) => cb.value.toLowerCase() === name.toLowerCase());
+  if (existing) existing.checked = true;
+  else renderBrandChoices([...checkedBrands(), name]);
+  $("#newBrand").value = "";
+  $("#newBrand").focus();
+}
+
 function openDrawer(lead, coords = null, prefill = null) {
   state.editing = lead;
   form.reset();
   $("#formError").hidden = true;
   $("#geoResults").hidden = true;
-  $("#drawerTitle").textContent = lead ? lead.company : "Nieuwe lead";
+  $("#subcategoryField").hidden = !SHOW_SUBCATEGORIES;
+  $("#statusField").hidden = !SHOW_STATUS;
+  renderBrandChoices(lead ? brandsOf(lead) : []);
+  $("#newBrand").value = "";
+  $("#drawerTitle").textContent = lead ? lead.company : "Nieuwe partner";
   fillSelect(form.status, Object.entries(STATUS_INFO).map(([k, s]) => [k, s.label]), lead?.status || "gesprek");
   fillSelect(form.country, [["", "—"], ...Object.entries(COUNTRIES)], lead ? lead.country || "" : "NL");
   for (const el of form.elements) {
@@ -769,7 +827,7 @@ function updateCoordsUI() {
     ? near.map((n) => `<li class="${n.km < min && counts(n.lead) ? "bad" : ""}">
         ${esc(n.lead.company)} (${esc(n.lead.city || "?")}) – ${fmtKm(n.km)}
         ${n.km < min && counts(n.lead) ? " ⚠ te dichtbij" : ""}</li>`).join("")
-    : "<li>Nog geen andere leads op de kaart.</li>";
+    : "<li>Nog geen andere partners op de kaart.</li>";
   showDraftMarker(c);
 }
 
@@ -859,6 +917,10 @@ async function saveLead(e) {
   e.preventDefault();
   const data = {};
   for (const el of form.elements) if (el.name) data[el.name] = el.value;
+  data.competitor_brands = checkedBrands();
+  // A brand typed in but not yet added with "Toevoegen" is saved too.
+  const typed = $("#newBrand").value.trim();
+  if (typed) data.competitor_brands.push(typed);
   const c = currentCoords();
   data.lat = c ? c.lat : null;
   data.lng = c ? c.lng : null;
@@ -871,7 +933,7 @@ async function saveLead(e) {
     selectLead(saved.id);
     const conflicts = state.conflicts.filter((x) => x.a.id === saved.id || x.b.id === saved.id);
     toast(conflicts.length
-      ? `Opgeslagen. ⚠ ${saved.company} ligt binnen ${state.settings.min_distance_km} km van ${conflicts.length} andere lead(s).`
+      ? `Opgeslagen. ⚠ ${saved.company} ligt binnen ${state.settings.min_distance_km} km van ${conflicts.length} andere partner(s).`
       : `${saved.company} opgeslagen.`, conflicts.length > 0);
   } catch (err) {
     $("#formError").textContent = err.message;
@@ -938,16 +1000,11 @@ async function importRoadmap(file) {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(await file.arrayBuffer());
     const parsed = Roadmap.readRoadmap(wb);
-    const { red, nocolor } = parsed.skipped;
-    const question = `${parsed.leads.length} leads gevonden in "${file.name}" ` +
-      `(${parsed.leads.filter((l) => l.data.status === "samenwerking").length} groen, ` +
-      `${parsed.leads.filter((l) => l.data.status === "gesprek").length} oranje).\n` +
-      `${red.length} rode rij(en) en ${nocolor.length} rij(en) zonder kleur worden overgeslagen.\n\n` +
-      "Bestaande leads met dezelfde naam worden bijgewerkt. Doorgaan?";
+    const question = `${parsed.leads.length} partners gevonden in "${file.name}".\n\n` +
+      "Bestaande partners met dezelfde naam worden bijgewerkt. Doorgaan?";
     if (!confirm(question)) return;
     const res = store.importLeads(parsed.leads);
     await reload();
-    if (nocolor.length) console.warn("Overgeslagen (geen kleur in kolom Status):\n" + nocolor.join("\n"));
     if (res.errors.length) console.warn("Importfouten:\n" + res.errors.join("\n"));
     toast(`Geïmporteerd: ${res.created} nieuw, ${res.updated} bijgewerkt` +
       (res.errors.length ? `, ${res.errors.length} fout(en) – zie console` : "") + ". Locaties worden nu gezocht…",
@@ -956,14 +1013,14 @@ async function importRoadmap(file) {
   } catch (err) { toast(err.message, true); }
 }
 
-// Place a pin for every lead that has a municipality but no location yet.
+// Place a pin for every partner that has a municipality but no location yet.
 async function geocodeMissing() {
   if (state.geocoding) return;
   const todo = state.leads.filter((l) => !hasGeo(l) && l.city);
   const noCity = state.leads.filter((l) => !hasGeo(l) && !l.city);
   if (!todo.length) {
-    toast(noCity.length ? `${noCity.length} lead(s) zonder gemeente: open ze om de locatie op de kaart te kiezen.`
-      : "Alle leads hebben al een locatie.");
+    toast(noCity.length ? `${noCity.length} partner(s) zonder gemeente: open ze om de locatie op de kaart te kiezen.`
+      : "Alle partners hebben al een locatie.");
     return;
   }
   const job = (state.geocoding = { stop: false });
@@ -988,7 +1045,7 @@ async function geocodeMissing() {
     if (notFound.length) parts.push(`niet gevonden: ${notFound.join(", ")}`);
     if (noCity.length) parts.push(`${noCity.length} zonder gemeente`);
     toast(parts.join(" · ") + (notFound.length || noCity.length
-      ? ". Open die leads om de locatie op de kaart te kiezen." : "."), notFound.length > 0, 12000);
+      ? ". Open die partners om de locatie op de kaart te kiezen." : "."), notFound.length > 0, 12000);
   } catch (err) {
     await reload();
     toast(`${err.message}. ${found} locatie(s) gevonden; probeer later opnieuw via Data → Ontbrekende locaties zoeken.`, true, 12000);
@@ -1004,7 +1061,9 @@ function openExportDialog() {
   $("#exportCategories").innerHTML = cats.length
     ? groupedHtml((g, label, sub) => `<label class="${sub ? "sub" : ""}"><input type="checkbox" name="cat" value="${esc(g.key)}" checked>
       <i class="swatch" style="background:${colorOf(g.key)}"></i>${esc(label)} <span class="muted">(${g.n})</span></label>`)
-    : `<p class="muted">Nog geen leads.</p>`;
+    : `<p class="muted">Nog geen partners.</p>`;
+  $("#exportStatusTitle").hidden = $("#exportStatuses").hidden = !SHOW_STATUS;
+  $("#layoutSubcategory").hidden = !SHOW_SUBCATEGORIES;
   $("#exportStatuses").innerHTML = Object.entries(STATUS_INFO).map(([k, s]) => `<label><input type="checkbox" name="status" value="${k}"
     ${k === "geen" ? "" : "checked"}> <i class="swatch" style="background:${s.color}"></i>${esc(s.label)}</label>`).join("");
   updateExportCount();
@@ -1014,19 +1073,19 @@ function openExportDialog() {
 function exportSelection() {
   const checked = (name) => new Set([...document.querySelectorAll(`#exportForm input[name=${name}]:checked`)].map((i) => i.value));
   const cats = checked("cat"), statuses = checked("status");
-  return state.leads.filter((l) => cats.has(categoryOf(l)) && statuses.has(l.status));
+  return state.leads.filter((l) => cats.has(categoryOf(l)) && (!SHOW_STATUS || statuses.has(l.status)));
 }
 
 function updateExportCount() {
   const n = exportSelection().length;
-  $("#exportCount").textContent = `${n} lead(s) geselecteerd.`;
+  $("#exportCount").textContent = `${n} partner(s) geselecteerd.`;
 }
 
 async function exportExcel(e) {
   e.preventDefault();
   try {
     const leads = exportSelection();
-    if (!leads.length) { toast("Selecteer minstens één lead.", true); return; }
+    if (!leads.length) { toast("Selecteer minstens één partner.", true); return; }
     const layout = $("#exportForm").layout.value;
     const wb = Roadmap.buildRoadmap(requireExcel(), leads, { groupBy: layout === "single" ? null : layout });
     const buffer = await wb.xlsx.writeBuffer();
@@ -1037,34 +1096,34 @@ async function exportExcel(e) {
     downloadFile(`ROADMAP_ACD_BENELUX${suffix}_${today()}.xlsx`,
       new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
     $("#exportDialog").hidden = true;
-    toast(`Excel met ${leads.length} lead(s) gedownload.`);
+    toast(`Excel met ${leads.length} partner(s) gedownload.`);
   } catch (err) { toast(err.message, true); }
 }
 
 /* ---------------- backup ---------------- */
 async function restoreBackup(file) {
-  if (!confirm("Een back-up terugzetten vervangt ALLE leads in deze browser door de back-up. Doorgaan?")) return;
+  if (!confirm("Een back-up terugzetten vervangt ALLE partners in deze browser door de back-up. Doorgaan?")) return;
   try {
     const res = store.importBackup(await file.text());
     state.selectedId = null;
     await reload();
-    toast(`Back-up teruggezet: ${res.leads} leads, ${res.activities} activiteiten.`);
+    toast(`Back-up teruggezet: ${res.leads} partners, ${res.activities} activiteiten.`);
   } catch (err) { toast(err.message, true); }
 }
 
 async function clearAllLeads() {
   const n = state.leads.length;
-  if (!n) { toast("Er zijn geen leads om te verwijderen."); return; }
-  if (!confirm(`Alle ${n} leads en hun activiteitenlog verwijderen?\n\n` +
+  if (!n) { toast("Er zijn geen partners om te verwijderen."); return; }
+  if (!confirm(`Alle ${n} partners en hun activiteitenlog verwijderen?\n\n` +
     "Er wordt eerst automatisch een back-up gedownload, zodat je alles kunt terugzetten. " +
     "Je instellingen (kleuren, afstandscheck) blijven behouden.")) return;
   try {
-    downloadFile(`acd-leads-backup-${today()}.json`, store.exportBackup(), "application/json");
+    downloadFile(`acd-partners-backup-${today()}.json`, store.exportBackup(), "application/json");
     const { removed } = store.clearLeads();
     state.selectedId = null;
     closeDrawer();
     await reload();
-    toast(`${removed} leads verwijderd. Back-up gedownload. Je kunt nu opnieuw importeren via Data → Importeren uit roadmap.`, false, 8000);
+    toast(`${removed} partners verwijderd. Back-up gedownload. Je kunt nu opnieuw importeren via Data → Importeren uit roadmap.`, false, 8000);
   } catch (err) { toast(err.message, true); }
 }
 
@@ -1072,7 +1131,7 @@ async function clearAllLeads() {
 function init() {
   ["#search", "#sortBy"].forEach((sel) =>
     $(sel).addEventListener("input", () => { renderList(); renderMap(); updateFilterSummary(); }));
-  ["#categoryFilter", "#statusFilter"].forEach((sel) => $(sel).addEventListener("change", onFilterChange));
+  ["#categoryFilter", "#statusFilter", "#brandFilter"].forEach((sel) => $(sel).addEventListener("change", onFilterChange));
   $("#clearFilters").addEventListener("click", clearFilters);
   $("#placeSearch").addEventListener("submit", searchPlace);
   $("#placeQuery").addEventListener("search", () => { if (!$("#placeQuery").value) clearPlaceSearch(); });
@@ -1138,6 +1197,10 @@ function init() {
   form.addEventListener("submit", saveLead);
   form.category.addEventListener("input", updateSubcategoryOptions);
   $("#deleteLead").addEventListener("click", deleteLead);
+  $("#addBrand").addEventListener("click", addBrandFromInput);
+  $("#newBrand").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addBrandFromInput(); }
+  });
   $("#geocodeBtn").addEventListener("click", geocodeAddress);
   $("#pickBtn").addEventListener("click", startPick);
   $("#cancelPick").addEventListener("click", stopPick);
@@ -1175,7 +1238,7 @@ function init() {
   $("#geoStop").addEventListener("click", () => { if (state.geocoding) state.geocoding.stop = true; });
 
   $("#backupBtn").addEventListener("click", () =>
-    downloadFile(`acd-leads-backup-${today()}.json`, store.exportBackup(), "application/json"));
+    downloadFile(`acd-partners-backup-${today()}.json`, store.exportBackup(), "application/json"));
   $("#restoreBtn").addEventListener("click", () => $("#restoreFile").click());
   $("#clearBtn").addEventListener("click", clearAllLeads);
   $("#restoreFile").addEventListener("change", (e) => {
@@ -1185,11 +1248,11 @@ function init() {
 
   if (window.innerWidth < 800) $("#legend").open = false;
   if (!store.persistent()) {
-    toast("Je browser blokkeert lokale opslag: leads gaan verloren als je deze pagina sluit. " +
+    toast("Je browser blokkeert lokale opslag: partners gaan verloren als je deze pagina sluit. " +
       "Download een back-up voor je afsluit.", true, 15000);
   }
 
-  reload().catch((err) => toast("Leads laden mislukt: " + err.message, true));
+  reload().catch((err) => toast("Partners laden mislukt: " + err.message, true));
 }
 
 init();

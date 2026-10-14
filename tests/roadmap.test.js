@@ -36,19 +36,19 @@ async function sampleWorkbook() {
   return loaded;
 }
 
-test("readRoadmap takes status from colour and skips red rows", async () => {
+test("readRoadmap imports every row and keeps the colour as status in the background", async () => {
   const res = R.readRoadmap(await sampleWorkbook());
   assert.deepEqual(res.leads.map((l) => [l.data.company, l.data.status]), [
     ["Test Galabau", "gesprek"],
     ["Groene Lead", "samenwerking"],
+    ["Rode Lead", "geen"],
     ["Galabau Messe", "samenwerking"],
+    ["Zonder kleur", undefined],
   ]);
-  assert.equal(res.skipped.red.length, 1);
-  assert.equal(res.skipped.nocolor.length, 1);
 
-  const [first, second, fair] = res.leads.map((l) => l.data);
+  const [first, second, , fair] = res.leads.map((l) => l.data);
   assert.equal(first.category, "Dealer", "old Domein values are split");
-  assert.equal(first.subcategory, "GaLa Bau");
+  assert.equal(first.subcategory, "GaLa Bau", "subcategory is kept in the data");
   assert.equal(second.category, "Ambassadeur");
   assert.equal(second.subcategory, "");
   assert.equal(first.city, "Kastl");
@@ -66,18 +66,19 @@ test("readRoadmap takes status from colour and skips red rows", async () => {
 test("a Categorie column is used as-is, with spelling variants normalised", async () => {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Roadmap");
-  ws.getRow(4).values = ["Categorie", "Subcategorie", "Onderneming", "Status"];
-  ws.getRow(5).values = ["Certified assembler", "Monteur - verkoper", "X GmbH"];
-  ws.getRow(6).values = ["Certified Assembler", "", "Y GmbH"];
-  ws.getRow(7).values = ["Ambassador", "", "Z GmbH"];
-  for (const r of [5, 6, 7]) ws.getRow(r).getCell(4).fill = fill("FF00B050");
+  ws.getRow(4).values = ["Categorie", "Onderneming", "Concurrerende merken"];
+  ws.getRow(5).values = ["premium  dealer", "X BV", "Janssens, euroserre"];
+  ws.getRow(6).values = ["Certified assembler", "Y BV"];
+  ws.getRow(7).values = ["Ambassador", "Z BV"];
+  ws.getRow(8).values = ["DEALER", "W BV", "Lams; Nieuw Merk"];
   const loaded = new ExcelJS.Workbook();
   await loaded.xlsx.load(await wb.xlsx.writeBuffer());
-  const leads = R.readRoadmap(loaded).leads.map((l) => [l.data.category, l.data.subcategory]);
+  const leads = R.readRoadmap(loaded).leads.map((l) => [l.data.category, l.data.competitor_brands || ""]);
   assert.deepEqual(leads, [
-    ["Certified Assembler", "Monteur-verkoper"],
+    ["Premium Dealer", "Janssens, euroserre"],
     ["Certified Assembler", ""],
     ["Ambassadeur", ""],
+    ["Dealer", "Lams; Nieuw Merk"],
   ]);
 });
 
@@ -93,33 +94,34 @@ test("classifyColor", () => {
 
 test("export can be imported again", async () => {
   const leads = [
-    { company: "B GmbH", category: "Dealer", subcategory: "GaLa Bau", status: "gesprek", city: "Kastl", next_action: "Bellen", next_action_date: "2026-10-06" },
-    { company: "A GmbH", category: "Ambassador", subcategory: "", status: "samenwerking", city: "Hamburg" }, // old name
-    { company: "C", category: "Dealer", subcategory: "Gartencenter", status: "gesprek", country: "BE" },
+    { company: "B BV", category: "Dealer", subcategory: "GaLa Bau", status: "gesprek", city: "Venlo", next_action: "Bellen",
+      next_action_date: "2026-10-06", competitor_brands: ["Janssens", "Royal Well"] },
+    { company: "A BV", category: "Ambassador", subcategory: "", status: "samenwerking", city: "Gent" }, // old name
+    { company: "C", category: "Premium Dealer", subcategory: "", status: "gesprek", country: "BE" },
     { company: "D", category: "Certified Assembler", subcategory: "Monteur", status: "gesprek" },
   ];
-  const bySub = R.buildRoadmap(ExcelJS, leads, { groupBy: "subcategory" });
-  assert.deepEqual(bySub.worksheets.map((w) => w.name),
-    ["Overzicht", "Dealer › Gartencenter", "Dealer › GaLa Bau", "Certified Assembler › Monteur", "Ambassador"]);
   const wb = R.buildRoadmap(ExcelJS, leads, { groupBy: "category" });
-  assert.deepEqual(wb.worksheets.map((w) => w.name), ["Overzicht", "Dealer", "Certified Assembler", "Ambassador"]);
+  assert.deepEqual(wb.worksheets.map((w) => w.name), ["Overzicht", "Dealer", "Premium Dealer", "Certified Assembler", "Ambassador"]);
   const ws = wb.worksheets[0];
-  assert.equal(ws.getCell("A4").value, "Categorie");
-  assert.equal(ws.getCell("B4").value, "Subcategorie");
-  assert.equal(ws.getCell("C5").value, "C", "sorted by category, then subcategory (Gartencenter first)");
-  assert.equal(ws.getCell("C6").value, "B GmbH");
-  assert.equal(ws.getCell("J8").value, "Samenwerking");
-  assert.equal(ws.getCell("J8").fill.fgColor.argb, "FF00B050");
+  const headers = ws.getRow(4).values.slice(1);
+  assert.equal(headers[0], "Categorie");
+  assert.ok(!headers.includes("Subcategorie") && !headers.includes("Status"), "hidden fields are not exported");
+  assert.ok(headers.includes("Concurrerende merken"));
+  assert.ok(headers.includes("Status informatie"));
+  const col = (name) => headers.indexOf(name) + 1;
+  assert.equal(ws.getRow(5).getCell(col("Onderneming")).value, "B BV", "sorted by category");
+  assert.equal(ws.getRow(5).getCell(col("Concurrerende merken")).value, "Janssens, Royal Well");
+  assert.equal(ws.getRow(6).getCell(col("Onderneming")).value, "C");
 
   const loaded = new ExcelJS.Workbook();
   await loaded.xlsx.load(await wb.xlsx.writeBuffer());
   const back = R.readRoadmap(loaded).leads.map((l) => l.data);
   assert.equal(back.length, 4);
-  const b = back.find((l) => l.company === "B GmbH");
-  assert.equal(b.status, "gesprek");
-  assert.deepEqual([b.category, b.subcategory], ["Dealer", "GaLa Bau"]);
+  const b = back.find((l) => l.company === "B BV");
+  assert.equal(b.category, "Dealer");
+  assert.equal(b.competitor_brands, "Janssens, Royal Well");
   assert.equal(back.find((l) => l.company === "C").country, "België", "Land column is exported and read back");
-  assert.equal(back.find((l) => l.company === "A GmbH").category, "Ambassadeur", "old names are renamed on import");
+  assert.equal(back.find((l) => l.company === "A BV").category, "Ambassadeur", "old names are renamed on import");
   assert.equal(b.next_action, "Bellen (tegen 06/10/2026)");
 });
 

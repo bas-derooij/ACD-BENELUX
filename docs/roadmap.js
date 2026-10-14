@@ -1,6 +1,6 @@
 /* ACD Benelux – read and write the "ROADMAP ACD BENELUX" Excel layout.
  *
- * readRoadmap(workbook)   -> leads found in the sheet (status taken from the colour of column J)
+ * readRoadmap(workbook)   -> partners found in the sheet (all rows with a company)
  * buildRoadmap(ExcelJS, leads, options) -> a styled workbook in the same layout
  *
  * Needs ExcelJS (window.ExcelJS in the browser, require("exceljs") in Node).
@@ -28,6 +28,7 @@
     "website": "website",
     "locatie": "city",
     "deelstaat": "state",
+    "provincie": "state",
     "land": "country",
     "status": "status",
     "status informatie": "status_info",
@@ -35,15 +36,19 @@
     "laatste bezoek": "last_visit",
     "demo-serre": "demo_serre",
     "notitie": "notes",
+    "concurrerende merken": "competitor_brands",
+    "merken": "competitor_brands",
   };
+  // Subcategorie and Status are only exported while the app shows them (see store.js).
   const EXPORT_COLUMNS = [
     ["Categorie", "category", 20], ["Subcategorie", "subcategory", 18], ["Onderneming", "company", 30], ["Naam", "contact_name", 24],
     ["Telefoonnummer", "phone", 20], ["Mailadres", "email", 30], ["Website", "website", 30],
-    ["Locatie", "city", 20], ["Deelstaat", "state", 20], ["Status", "status", 18],
+    ["Locatie", "city", 20], ["Provincie", "state", 20], ["Status", "status", 18],
+    ["Concurrerende merken", "competitor_brands", 30],
     ["Status informatie", "status_info", 45], ["Volgende actie", "next_action", 35],
     ["Laatste bezoek", "last_visit", 15], ["Demo-serre", "demo_serre", 20], ["Notitie", "notes", 45],
     ["Land", "country", 14],
-  ];
+  ].filter(([, field]) => (field !== "subcategory" || Store.SHOW_SUBCATEGORIES) && (field !== "status" || Store.SHOW_STATUS));
   const EMPTY_MARKERS = new Set(["/", "?", "-"]);
 
   const norm = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase().replace(/[:.]$/, "");
@@ -133,7 +138,7 @@
         }
       });
 
-      const result = { sheet: ws.name, leads: [], skipped: { red: [], nocolor: [], empty: 0 } };
+      const result = { sheet: ws.name, leads: [], skipped: { empty: 0 } };
       for (let r = headerRow + 1; r <= ws.rowCount; r++) {
         const row = ws.getRow(r);
         const data = {};
@@ -150,12 +155,11 @@
         [data.category, data.subcategory] = Store.normalizeNames(data.category, data.subcategory);
         const label = `Rij ${r} (${data.company || "zonder naam"})`;
 
+        // Every row is imported. The status (colour) is kept in the background when the sheet has one.
         const statusCell = columns.status ? row.getCell(columns.status) : null;
         const status = (statusCell && statusFromText(cellText(statusCell.value))) ||
           classifyColor(fillHex(statusCell, theme));
-        if (status === "geen") { result.skipped.red.push(label); continue; }
-        if (!status) { result.skipped.nocolor.push(label); continue; }
-        data.status = status;
+        if (status) data.status = status;
         result.leads.push({ label, data });
       }
       return result;
@@ -195,9 +199,11 @@
     ws.mergeCells("A1:C1");
     Object.assign(ws.getCell("A1"), { value: "ROADMAP ACD BENELUX" });
     ws.getCell("A1").font = { bold: true, size: 14 };
-    ws.mergeCells("H1:K1");
-    ws.getCell("H1").value = "Legende: ROOD = geen samenwerking   |   ORANJE = gesprek   |   GROEN = samenwerking";
-    ws.getCell("H1").font = { italic: true };
+    if (Store.SHOW_STATUS) {
+      ws.mergeCells("H1:K1");
+      ws.getCell("H1").value = "Legende: ROOD = geen samenwerking   |   ORANJE = gesprek   |   GROEN = samenwerking";
+      ws.getCell("H1").font = { italic: true };
+    }
     ws.getCell("A2").value = "Update datum:";
     ws.getCell("A2").font = { bold: true };
     ws.getCell("B2").value = today;
@@ -226,6 +232,7 @@
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + info.color } };
           cell.font = { bold: true, color: { argb: lead.status === "gesprek" ? "FF000000" : "FFFFFFFF" } };
         }
+        if (field === "competitor_brands") value = (lead.competitor_brands || []).join(", ");
         if (field === "country") value = Store.COUNTRIES[lead.country] || lead.country || "";
         if (field === "next_action" && lead.next_action_date) {
           const [y, m, d] = lead.next_action_date.split("-");
@@ -243,7 +250,7 @@
   /* options.groupBy: "category" or "subcategory" adds one tab per group after an overview tab. */
   function buildRoadmap(ExcelJS, leads, options = {}) {
     const wb = new ExcelJS.Workbook();
-    wb.creator = "ACD Benelux lead manager";
+    wb.creator = "ACD Benelux partner tracker";
     const now = new Date();
     const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
     const used = new Set();
@@ -252,7 +259,7 @@
     if (groupBy) {
       const groups = new Map();
       for (const lead of sortLeads(leads)) {
-        const key = groupBy === "subcategory" ? Store.groupKey(lead) : (lead.category || Store.NO_CATEGORY);
+        const key = groupBy === "subcategory" ? Store.groupKey(lead, true) : (lead.category || Store.NO_CATEGORY);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(lead);
       }

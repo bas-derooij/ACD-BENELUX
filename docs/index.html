@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ACD Benelux · Leads</title>
+  <title>ACD Benelux · Partners</title>
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -11,16 +11,16 @@
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">ACD</span>
-      <span class="brand-title">Leads Benelux</span>
+      <span class="brand-title">Partners Benelux</span>
     </div>
     <form id="placeSearch" class="place-search" autocomplete="off" role="search">
       <input id="placeQuery" type="search" placeholder="Zoek gemeente of postcode…"
-        aria-label="Zoek een gemeente of postcode om te zien welke leads in de buurt liggen">
+        aria-label="Zoek een gemeente of postcode om te zien welke partners in de buurt liggen">
       <button class="btn" type="submit">Zoeken</button>
       <ul id="placeResults" class="place-results" hidden></ul>
     </form>
     <div class="topbar-actions">
-      <label class="distance-setting" title="Leads die dichter bij elkaar liggen worden gemarkeerd als te dichtbij">
+      <label class="distance-setting" title="Partners die dichter bij elkaar liggen worden gemarkeerd als te dichtbij">
         Min. afstand
         <input id="minDistance" type="number" min="1" max="1000" step="1"> km
       </label>
@@ -34,12 +34,12 @@
           <button id="backupBtn" type="button">Back-up downloaden (alle gegevens)</button>
           <button id="restoreBtn" type="button">Back-up terugzetten…</button>
           <hr>
-          <button id="clearBtn" type="button" class="danger-item">Alle leads verwijderen…</button>
-          <p class="menu-note">Je leads worden bewaard in deze browser op deze computer.
+          <button id="clearBtn" type="button" class="danger-item">Alle partners verwijderen…</button>
+          <p class="menu-note">Je partners worden bewaard in deze browser op deze computer.
             Download regelmatig een back-up.</p>
         </div>
       </details>
-      <button id="newLeadBtn" class="btn primary" type="button">+ Nieuwe lead</button>
+      <button id="newLeadBtn" class="btn primary" type="button">+ Nieuwe partner</button>
       <input id="importFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
       <input id="restoreFile" type="file" accept=".json,application/json" hidden>
     </div>
@@ -48,7 +48,7 @@
   <main class="layout">
     <aside class="sidebar">
       <div class="tabs" role="tablist">
-        <button class="tab active" data-tab="leads" role="tab">Leads <span id="leadCount" class="count"></span></button>
+        <button class="tab active" data-tab="leads" role="tab">Partners <span id="leadCount" class="count"></span></button>
         <button class="tab" data-tab="conflicts" role="tab">Te dichtbij <span id="conflictCount" class="count"></span></button>
       </div>
 
@@ -61,6 +61,10 @@
               <div class="multi-panel"></div>
             </details>
             <details class="multi" id="statusFilter">
+              <summary></summary>
+              <div class="multi-panel"></div>
+            </details>
+            <details class="multi" id="brandFilter">
               <summary></summary>
               <div class="multi-panel"></div>
             </details>
@@ -97,7 +101,7 @@
         <div id="legendBody"></div>
       </details>
       <div id="pickBanner" class="pick-banner" hidden>
-        Klik op de kaart om de locatie van deze lead te kiezen
+        Klik op de kaart om de locatie van deze partner te kiezen
         <button id="cancelPick" class="btn small" type="button">Annuleren</button>
       </div>
       <div id="geoProgress" class="geo-progress" hidden>
@@ -107,20 +111,30 @@
     </section>
   </main>
 
-  <!-- Lead editor -->
+  <!-- Partner editor -->
   <div id="drawer" class="drawer" hidden>
     <div class="drawer-panel">
       <header class="drawer-head">
-        <h2 id="drawerTitle">Nieuwe lead</h2>
+        <h2 id="drawerTitle">Nieuwe partner</h2>
         <button id="closeDrawer" class="icon-btn" type="button" aria-label="Sluiten">×</button>
       </header>
       <form id="leadForm" class="drawer-body" autocomplete="off">
         <fieldset>
-          <legend>Lead</legend>
+          <legend>Partner</legend>
           <label class="full">Onderneming *<input name="company" required></label>
           <label>Categorie<input name="category" list="categories" placeholder="bv. Dealer"></label>
-          <label>Subcategorie<input name="subcategory" list="subcategories" placeholder="bv. GaLa Bau"></label>
-          <label>Status<select name="status"></select></label>
+          <label id="subcategoryField">Subcategorie<input name="subcategory" list="subcategories"></label>
+          <label id="statusField">Status<select name="status"></select></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Concurrerende merken</legend>
+          <p class="full field-note">Welke andere merken verkoopt deze partner?</p>
+          <div id="brandChoices" class="brand-choices full"></div>
+          <div class="full brand-add">
+            <input id="newBrand" placeholder="Ander merk toevoegen…" aria-label="Ander merk toevoegen">
+            <button id="addBrand" class="btn" type="button">Toevoegen</button>
+          </div>
         </fieldset>
 
         <fieldset>
@@ -150,7 +164,7 @@
           <input name="lng" type="hidden">
           <input name="geo_auto" type="hidden">
           <div id="nearbyBox" class="nearby full" hidden>
-            <h4>Dichtstbijzijnde andere leads</h4>
+            <h4>Dichtstbijzijnde andere partners</h4>
             <ul id="nearbyList"></ul>
           </div>
         </fieldset>
@@ -203,14 +217,14 @@
       <div class="modal-body">
         <h4>Categorieën</h4>
         <p class="modal-links"><a href="#" data-check="cat:all">Alles</a> · <a href="#" data-check="cat:none">Niets</a> ·
-          <a href="#" data-check="cat:dealers">Alleen dealers</a></p>
+          <a href="#" data-check="cat:dealers">Alleen (premium) dealers</a></p>
         <div id="exportCategories" class="check-grid"></div>
-        <h4>Status</h4>
+        <h4 id="exportStatusTitle">Status</h4>
         <div id="exportStatuses" class="check-grid"></div>
         <h4>Indeling</h4>
-        <label class="radio"><input type="radio" name="layout" value="single" checked> Eén tabblad met alle geselecteerde leads</label>
+        <label class="radio"><input type="radio" name="layout" value="single" checked> Eén tabblad met alle geselecteerde partners</label>
         <label class="radio"><input type="radio" name="layout" value="category"> Een overzicht + één tabblad per categorie</label>
-        <label class="radio"><input type="radio" name="layout" value="subcategory"> Een overzicht + één tabblad per subcategorie</label>
+        <label class="radio" id="layoutSubcategory"><input type="radio" name="layout" value="subcategory"> Een overzicht + één tabblad per subcategorie</label>
         <p id="exportCount" class="hint"></p>
       </div>
       <div class="drawer-actions modal-actions">
