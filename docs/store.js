@@ -64,8 +64,8 @@
   };
   // Pin fill colour per group.
   const KNOWN_CATEGORY_COLORS = {
-    "Dealer": "#2563eb",                   // blue
-    "Premium Dealer": "#d4a017",           // gold
+    "Dealer": "#8bc34a",                   // light green
+    "Premium Dealer": "#f57c00",           // orange
     "Certified Assembler": "#8c5a3c",      // brown
     "Ambassadeur": "#d147a3",              // pink
     // Earlier subcategories (only used when data from older versions is migrated).
@@ -94,7 +94,7 @@
     "beurs bezoek": ["Beurs", "Bezoek"],
     "beurs deelname": ["Beurs", "Deelname"],
   };
-  const DATA_VERSION = 8;
+  const DATA_VERSION = 9;
 
   // Countries a partner can be in (ISO code -> name shown in the app).
   const COUNTRIES = { NL: "Nederland", BE: "België", LU: "Luxemburg", DE: "Duitsland", FR: "Frankrijk" };
@@ -256,6 +256,10 @@
       if (Array.isArray(settings.excluded_categories)) {
         settings.excluded_categories = [...new Set(settings.excluded_categories.map((k) => k.split(SEP)[0]))];
       }
+    }
+    if (version === 8 && settings.category_colors) {
+      // Version 9: Dealer light green and Premium Dealer orange (on request).
+      for (const category of ["Dealer", "Premium Dealer"]) settings.category_colors[category] = KNOWN_CATEGORY_COLORS[category];
     }
     db.version = DATA_VERSION;
     return db;

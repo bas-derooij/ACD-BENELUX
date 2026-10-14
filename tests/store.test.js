@@ -110,9 +110,19 @@ test("version 7 data gets the partner categories and colours", async () => {
   assert.deepEqual(lead.competitor_brands, []);
   const s = await store.request("GET", "settings");
   assert.deepEqual(["Dealer", "Premium Dealer", "Certified Assembler", "Ambassadeur"].map((c) => s.category_colors[c]),
-    ["#2563eb", "#d4a017", "#8c5a3c", "#d147a3"]);
+    ["#8bc34a", "#f57c00", "#8c5a3c", "#d147a3"]);
   assert.equal(s.category_colors["Iets eigens"], "#123456", "own colours are kept");
   assert.deepEqual(s.excluded_categories, ["Beurs", "Ambassadeur"]);
+});
+
+test("version 8 colours: Dealer light green, Premium Dealer orange", async () => {
+  const storage = memoryStorage();
+  storage.setItem(STORAGE_KEY, JSON.stringify({
+    version: 8, next_lead_id: 1, next_activity_id: 1, activities: [], leads: [],
+    settings: { category_colors: { "Dealer": "#2563eb", "Premium Dealer": "#d4a017", "Ambassadeur": "#123456" } },
+  }));
+  const c = (await createStore(storage).request("GET", "settings")).category_colors;
+  assert.deepEqual([c["Dealer"], c["Premium Dealer"], c["Ambassadeur"]], ["#8bc34a", "#f57c00", "#123456"]);
 });
 
 test("competitor brands", async () => {
@@ -189,8 +199,8 @@ test("settings and category colours", async () => {
   await store.request("POST", "leads", { company: "B", category: "Iets nieuws" });
   await store.request("POST", "leads", { company: "C" });
   s = await store.request("GET", "settings");
-  assert.equal(s.category_colors["Dealer"], "#2563eb");
-  assert.equal(s.category_colors["Premium Dealer"], "#d4a017");
+  assert.equal(s.category_colors["Dealer"], "#8bc34a");
+  assert.equal(s.category_colors["Premium Dealer"], "#f57c00");
   assert.match(s.category_colors["Iets nieuws"], /^#[0-9a-f]{6}$/);
   assert.ok(s.category_colors["Zonder categorie"]);
 
@@ -200,7 +210,7 @@ test("settings and category colours", async () => {
   assert.equal(s.min_distance_km, 20);
   assert.deepEqual(s.excluded_categories, ["Iets nieuws"]);
   assert.equal(s.category_colors["Iets nieuws"], "#123456");
-  assert.equal(s.category_colors["Dealer"], "#2563eb");
+  assert.equal(s.category_colors["Dealer"], "#8bc34a");
 });
 
 test("importLeads creates and updates by company name", async () => {

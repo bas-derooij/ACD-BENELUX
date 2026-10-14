@@ -17,8 +17,8 @@ Je partners worden **in de browser op je eigen computer** bewaard, niet online e
 
   | Categorie | Kleur |
   |---|---|
-  | Dealer | blauw |
-  | Premium Dealer | goud |
+  | Dealer | lichtgroen |
+  | Premium Dealer | oranje |
   | Certified Assembler | bruin |
   | Ambassadeur | roze |
 
